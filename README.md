@@ -1,4 +1,4 @@
-# FSDP vs PyTorch Baseline Training Benchmark
+# FSDP vs PyTorch Baseline Training Benchmark using RTX 4090 GPU
 
 ## Overview
 
