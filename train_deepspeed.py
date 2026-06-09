@@ -8,7 +8,7 @@ from metrics import gpu_util, mem
 
 
 # -----------------------------
-# DeepSpeed config (minimal stable)
+# DeepSpeed config (minimal + stable)
 # -----------------------------
 ds_config = {
     "train_micro_batch_size_per_gpu": 2,
@@ -30,7 +30,7 @@ def run():
     model = get_model()
     model.train()
 
-    # REQUIRED for DeepSpeed ZeRO
+    # DeepSpeed REQUIRES optimizer for ZeRO
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
     # -----------------------------
@@ -56,11 +56,10 @@ def run():
         batch = {k: v.to(model_engine.device) for k, v in batch.items()}
 
         # -----------------------------
-        # SAFE forward (THIS FIXES YOUR ERROR)
+        # SAFE HF FORWARD (FIXES YOUR ERROR)
         # -----------------------------
         outputs = model_engine(
             input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
             labels=batch["labels"],
             return_dict=True
         )
