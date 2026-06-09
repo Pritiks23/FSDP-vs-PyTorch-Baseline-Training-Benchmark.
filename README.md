@@ -1,168 +1,201 @@
 # FSDP vs PyTorch Baseline Training Benchmark using RTX 4090 GPU
 
 ## Overview
-<img width="640" height="480" alt="image" src="https://github.com/user-attachments/assets/481da7e9-075c-45a5-a84e-5f979cda7283" />
-<img width="640" height="480" alt="image" src="https://github.com/user-attachments/assets/f7fb5c03-4b56-4bfc-893d-140e3e51db93" />
+<img width="400" height="480" alt="image" src="https://github.com/user-attachments/assets/481da7e9-075c-45a5-a84e-5f979cda7283" />
+<img width="400" height="480" alt="image" src="https://github.com/user-attachments/assets/f7fb5c03-4b56-4bfc-893d-140e3e51db93" />
 
+# FSDP vs PyTorch Baseline Training Benchmark
 
-This project benchmarks and compares two training paradigms for a causal language model (GPT-style architecture):
+## Overview
 
-- **Standard PyTorch training loop (baseline)**
-- **Fully Sharded Data Parallel (FSDP) training**
+This project compares two training strategies for a GPT-style causal language model:
 
-The goal is to empirically evaluate differences in:
+- **PyTorch baseline (single-process training loop)**
+- **Fully Sharded Data Parallel (FSDP)**
+
+The objective is to measure real system-level tradeoffs in:
 
 - Step latency (ms/iteration)
-- Training stability (loss dynamics)
-- System overhead vs optimization efficiency tradeoffs
-
-All experiments were run in a controlled single-GPU environment to isolate framework overhead rather than distributed scaling benefits.
+- Training stability (loss convergence)
+- Runtime overhead introduced by distributed abstractions
 
 ---
 
 ## Experimental Setup
 
 ### Model
-- Architecture: GPT-2–style causal language model
-- Task: Autoregressive next-token prediction
-- Loss: Cross-entropy loss over token sequences
+- GPT-2–style causal language model
+- Objective: next-token prediction (cross-entropy loss)
 
 ### Hardware
 - Single NVIDIA GPU (Vast.ai instance)
-- CUDA-enabled runtime environment
-
-### Frameworks
-
-#### PyTorch Baseline
-- Standard single-process training loop
-- Direct forward and backward pass execution
-- No distributed training abstraction overhead
-
-#### FSDP (Fully Sharded Data Parallel)
-- Parameters, gradients, and optimizer states are sharded
-- Uses `torch.distributed.fsdp`
-- Designed primarily for multi-GPU and memory scaling
+- One process per experiment (no multi-GPU scaling in this run)
 
 ---
 
 ## Metrics Collected
 
-Each training step logs:
+Each step logs:
 
-- `step_time_ms` → iteration latency
-- `loss` → training objective value
-- `gpu` → device identifier
-- `mem` → GPU memory usage (MB)
+- **Step time (ms)** — wall-clock iteration latency
+- **Training loss** — optimization objective
+- **GPU utilization ID (debug field)**
+- **Memory footprint (MB)**
 
 ---
 
 ## Results
 
-### Average Step Time
+# 1. Step Latency Comparison
 
-| Method | Average Step Time (ms) |
-|--------|------------------------|
-| PyTorch Baseline | **20.39 ms** |
-| FSDP | **26.92 ms** |
+### Key Observations (from plot)
 
-### Key Observations from Plots
+#### Initial step overhead (cold start)
+- PyTorch baseline: ~**313 ms**
+- FSDP: ~**505 ms**
 
-- PyTorch baseline consistently achieves lower per-step latency
-- FSDP shows higher overhead and slightly higher variance
-- Both methods exhibit similar loss convergence behavior
+This spike reflects:
+- CUDA kernel warmup
+- Graph compilation / initialization
+- FSDP wrapping + distributed context setup
+
+---
+
+#### Steady-state training latency (steps 1–50)
+
+After warmup, both systems stabilize:
+
+| Method | Typical Step Time |
+|--------|------------------|
+| PyTorch baseline | ~19–21 ms |
+| FSDP | ~25–28 ms |
+
+### Interpretation
+
+- PyTorch baseline is consistently faster per step
+- FSDP introduces ~20–35% overhead even without multi-GPU usage
+- Overhead comes from:
+  - Parameter sharding logic
+  - Autograd hooks
+  - Materialization/unsharding steps
+  - Distributed scaffolding
+
+---
+
+# 2. Training Loss Comparison
+
+### Key Observations (from plot)
+
+Both methods show nearly identical convergence behavior:
+
+#### Initial loss
+- PyTorch: ~12.9
+- FSDP: ~12.7
+
+#### Final stabilized region (steps ~20–50)
+- Both converge around: **10.9 – 11.1**
+
+### Interpretation
+
+- Loss curves overlap almost perfectly
+- No degradation in optimization quality from FSDP
+- Minor stochastic noise differences are expected due to:
+  - Different execution ordering
+  - Kernel scheduling variance
+  - Non-deterministic GPU operations
 
 ---
 
 ## Key Findings
 
-### 1. PyTorch Baseline is Faster on Single GPU
+### 1. PyTorch Baseline is Faster in Single-GPU Setting
 
-The baseline avoids distributed system overhead:
+The baseline avoids distributed abstraction overhead:
 
-- No parameter sharding/unsharding
+- No parameter sharding
 - No distributed autograd hooks
-- No synchronization barriers
+- No communication layers
+- Minimal runtime indirection
 
-This results in lower execution latency per step.
-
----
-
-### 2. FSDP Introduces Overhead Even Without Multi-GPU Scaling
-
-Although FSDP is designed for large-scale distributed training, it still incurs overhead in single-GPU settings:
-
-- Forward pass materialization of sharded parameters
-- Backward hooks for gradient gathering
-- Internal distributed context initialization
-
-This overhead increases step latency without providing scaling benefits.
+➡ Result: lower latency per step
 
 ---
 
-### 3. Why FSDP Still Exists
+### 2. FSDP Has Real Overhead Even Without Scaling Benefit
 
-FSDP is not optimized for single-device performance. Its purpose is:
+Even on a single GPU:
 
-- Enable training of models that exceed single-GPU memory limits
-- Reduce memory footprint via parameter sharding
-- Scale efficiently across multiple GPUs/nodes
+- FSDP still constructs distributed execution graphs
+- Wraps model parameters into sharded representations
+- Executes synchronization logic that is effectively unnecessary in this setting
 
-| Property | PyTorch Baseline | FSDP |
-|----------|------------------|------|
-| Single-GPU speed | Faster | Slower |
-| Multi-GPU scalability | Limited | Strong |
-| Memory efficiency | Moderate | High |
+➡ Result: higher latency with no memory/scaling advantage in this setup
+
+---
+
+### 3. Initial Spike is Significant and Systemic
+
+Both systems show a large first-step spike:
+
+- PyTorch: ~313 ms
+- FSDP: ~505 ms
+
+This is caused by:
+- CUDA context initialization
+- Kernel caching
+- Graph setup
+- Memory allocator warmup
+- FSDP wrapping overhead (extra cost for FSDP)
+
+This is expected behavior in ML systems benchmarks and should NOT be averaged into steady-state performance.
+
+---
+
+### 4. Why FSDP Still Exists (Despite Being Slower Here)
+
+FSDP is not designed for single-GPU optimization.
+
+It provides:
+
+| Property | PyTorch | FSDP |
+|----------|--------|------|
+| Single GPU speed | Faster | Slower |
+| Multi-GPU scaling | Limited | Strong |
+| Memory efficiency | Medium | High |
 | Large model support | Limited | Excellent |
 
----
-
-### 4. Loss Behavior
-
-Both systems produce nearly identical loss curves:
-
-- Rapid initial loss decrease
-- Stable convergence trend
-- Minor stochastic variation across steps
-
-This indicates:
-
-> FSDP does not change optimization dynamics, only system execution behavior.
-
----
-
-## Interpretation
-
-The tradeoff demonstrated is fundamental in ML systems design:
-
-> **FSDP optimizes for scalability, not single-device speed.**
-
-Thus:
-
-- PyTorch baseline is optimal for small-scale / single-GPU training
-- FSDP becomes essential when model or batch size exceeds GPU memory limits
-- Performance overhead is the cost of enabling large-scale training
+FSDP becomes essential when:
+- Models exceed single GPU memory
+- Training requires sharding optimizer states
+- Scaling across multiple GPUs/nodes
 
 ---
 
 ## Conclusion
 
-This benchmark highlights a key principle in deep learning systems:
+This benchmark demonstrates a fundamental systems tradeoff:
 
-> System design choices depend on scaling constraints, not isolated performance.
+> **Abstraction for scalability introduces overhead in non-scaled environments**
 
-FSDP introduces measurable overhead in small-scale settings, but enables training regimes that are otherwise infeasible due to memory constraints in large-scale models.
+In this experiment:
+
+- PyTorch baseline = best for single-device efficiency
+- FSDP = best for distributed and memory-constrained training
+
+The identical loss curves confirm that:
+> FSDP changes execution strategy, not learning dynamics.
 
 ---
 
 ## Future Work
 
-Potential extensions:
+To extend this benchmark meaningfully:
 
-- Multi-GPU scaling efficiency (1 → 8 → 32 GPUs)
-- Memory profiling (activation + optimizer state breakdown)
-- Throughput analysis (tokens/sec)
-- Comparison with DeepSpeed ZeRO-3
-- Mixed precision (FP16/BF16) impact analysis
-- Communication overhead breakdown per layer
+- Multi-GPU scaling efficiency curves (1 → 2 → 4 → 8 GPUs)
+- Memory scaling vs model size
+- Tokens/sec throughput benchmarking
+- ZeRO-3 (DeepSpeed) comparison
+- Mixed precision (FP16/BF16) impact
+- Communication overhead profiling per layer
 
 ---
