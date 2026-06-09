@@ -1,10 +1,12 @@
 import torch
+import json
 from torch.utils.data import DataLoader
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 from model import get_model
 from dataset import ToyDataset
 from metrics import Timer, gpu_util, mem
+
 
 def run():
     model = get_model().cuda()
@@ -22,16 +24,19 @@ def run():
             opt.step()
             opt.zero_grad()
 
-        print({
+        log = {
             "step": step,
             "time_ms": t.dt,
             "gpu": gpu_util(),
             "mem": mem(),
             "loss": loss.item()
-        })
+        }
 
-        if step == 50:
+        print(json.dumps(log))
+
+        if step >= 50:
             break
+
 
 if __name__ == "__main__":
     run()
